@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument("--batch", type=int, default=Cfg.batch, help="batch size")
     parser.add_argument("--lr", type=float, default=Cfg.lr, help="learning rate")
     parser.add_argument("--img-size", type=int, default=Cfg.img_size, help="input image size")
-    parser.add_argument("--device", type=str, default=Cfg.device, help="training device")
+    parser.add_argument("--device", default=Cfg.device, help="training device")
     return parser.parse_args()
 
 # ----------------------------
@@ -94,11 +94,9 @@ class CPConjDataset(Dataset):
         self.root = root; self.mask_root = mask_root
         self.img_size = img_size; self.augment = augment
         if items is None:
-            # 두 클래스 모두에서 수집
             imgs = list_images(root)
         else:
             imgs = items
-        # 마스크가 있는 항목만
         valid = []
         for ip in imgs:
             m = mask_root / f"{ip.stem}_mask.png"
@@ -117,27 +115,24 @@ class CPConjDataset(Dataset):
         if img is None: raise RuntimeError(f"fail image: {ip}")
         if mask is None: raise RuntimeError(f"fail mask: {mp}")
 
-        # 리사이즈(동일 파이프)
         img, _ = resize_letterbox(img, self.img_size)
         mask, _ = resize_letterbox(mask, self.img_size)
 
-        # 간단한 augmentation (학습시에만)
         if self.augment:
             if random.random()<0.5:
                 img = cv2.flip(img, 1); mask = cv2.flip(mask, 1)
             if random.random()<0.15:
-                # 밝기/대비
                 a = 1.0 + (random.random()-0.5)*0.4
                 b = (random.random()-0.5)*40
                 img = np.clip(img*a + b, 0, 255).astype(np.uint8)
 
-        mask = (mask>127).astype(np.float32)  # 0/1
+        mask = (mask>127).astype(np.float32)
         img_t = to_tensor(img)
         mask_t = torch.from_numpy(mask)[None, ...].float()
         return img_t, mask_t, str(ip)
 
 # ----------------------------
-# Model (간결 U-Net)
+# Model
 # ----------------------------
 class DoubleConv(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -235,8 +230,7 @@ def save_preds(model, loader, device, out_dir:Path, max_save:int=6):
                 saved+=1
 
 def train(args):
-    device = str(args.device)
-    Cfg.device = device
+    device = args.device
     set_seed(Cfg.seed)
     all_imgs = list_images(args.root)
     tr_items, va_items = split_train_val(all_imgs, Cfg.val_ratio, Cfg.seed)
@@ -287,7 +281,6 @@ def train(args):
 
         print(f"[{epoch:03d}/{args.epochs}] train_loss={tl:.4f} val_loss={vl:.4f}  train_iou={tiou:.3f} val_iou={viou:.3f}")
 
-        # save best by val_loss, and keep best_iou too
         if vl < best_val:
             best_val = vl
             cfg_dump = {k: v for k, v in vars(Cfg).items() if not k.startswith("__")}
@@ -304,4 +297,5 @@ def train(args):
 
 if __name__ == "__main__":
     args = parse_args()
+    Cfg.device = str(args.device)
     train(args)
