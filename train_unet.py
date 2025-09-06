@@ -7,6 +7,7 @@ U-Net training on CP-AnemiC ROI images with auto-generated GT masks.
 """
 
 from __future__ import annotations
+import argparse
 import os, random, math, time
 from pathlib import Path
 from typing import Tuple, List
@@ -36,6 +37,19 @@ class Cfg:
     amp: bool = True            # 자동 혼합정밀
     save_every_pred: int = 3    # N에폭마다 예측 샘플 저장
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# ----------------------------
+# Argparse
+# ----------------------------
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train U-Net on CP-AnemiC ROI images")
+    parser.add_argument("--root", type=Path, default=Cfg.root, help="dataset root directory")
+    parser.add_argument("--mask-root", type=Path, default=Cfg.mask_root, help="ground truth mask directory")
+    parser.add_argument("--epochs", type=int, default=Cfg.epochs, help="number of training epochs")
+    parser.add_argument("--batch", type=int, default=Cfg.batch, help="batch size")
+    parser.add_argument("--lr", type=float, default=Cfg.lr, help="learning rate")
+    parser.add_argument("--img-size", type=int, default=Cfg.img_size, help="input image size")
+    return parser.parse_args()
 
 # ----------------------------
 # Utils
@@ -219,27 +233,27 @@ def save_preds(model, loader, device, out_dir:Path, max_save:int=6):
                 cv2.imwrite(str(out_dir/f"{stem}_overlay.png"), ov)
                 saved+=1
 
-def train():
+def train(args):
     set_seed(Cfg.seed)
-    all_imgs = list_images(Cfg.root)
+    all_imgs = list_images(args.root)
     tr_items, va_items = split_train_val(all_imgs, Cfg.val_ratio, Cfg.seed)
-    train_ds = CPConjDataset(Cfg.root, Cfg.mask_root, Cfg.img_size, tr_items, augment=True)
-    val_ds   = CPConjDataset(Cfg.root, Cfg.mask_root, Cfg.img_size, va_items, augment=False)
+    train_ds = CPConjDataset(args.root, args.mask_root, args.img_size, tr_items, augment=True)
+    val_ds   = CPConjDataset(args.root, args.mask_root, args.img_size, va_items, augment=False)
 
-    train_loader = DataLoader(train_ds, batch_size=Cfg.batch, shuffle=True, num_workers=Cfg.num_workers, pin_memory=True)
-    val_loader   = DataLoader(val_ds,   batch_size=Cfg.batch, shuffle=False, num_workers=Cfg.num_workers, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=Cfg.num_workers, pin_memory=True)
+    val_loader   = DataLoader(val_ds,   batch_size=args.batch, shuffle=False, num_workers=Cfg.num_workers, pin_memory=True)
 
     model = UNet(in_ch=3, out_ch=1, base=32).to(Cfg.device)
     bce = nn.BCEWithLogitsLoss()
     dice = DiceLoss()
-    opt = torch.optim.AdamW(model.parameters(), lr=Cfg.lr, weight_decay=Cfg.weight_decay)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=Cfg.weight_decay)
     scaler = torch.cuda.amp.GradScaler(enabled=(Cfg.amp and Cfg.device=="cuda"))
 
     Cfg.out_dir.mkdir(parents=True, exist_ok=True)
     Cfg.pred_dir.mkdir(parents=True, exist_ok=True)
 
     best_val = 1e9; best_iou = 0.0
-    for epoch in range(1, Cfg.epochs+1):
+    for epoch in range(1, args.epochs+1):
         model.train()
         tl, tiou = 0.0, 0.0
         for imgs, masks, _ in train_loader:
@@ -267,7 +281,7 @@ def train():
                 viou += iou_score(logits, masks)*imgs.size(0)
         vl /= len(val_ds); viou /= len(val_ds)
 
-        print(f"[{epoch:03d}/{Cfg.epochs}] train_loss={tl:.4f} val_loss={vl:.4f}  train_iou={tiou:.3f} val_iou={viou:.3f}")
+        print(f"[{epoch:03d}/{args.epochs}] train_loss={tl:.4f} val_loss={vl:.4f}  train_iou={tiou:.3f} val_iou={viou:.3f}")
 
         # save best by val_loss, and keep best_iou too
         if vl < best_val:
@@ -283,4 +297,5 @@ def train():
     print(f"Done. best_val={best_val:.4f}, best_iou={best_iou:.3f}, saved to {Cfg.out_dir}")
 
 if __name__ == "__main__":
-    train()
+    args = parse_args()
+    train(args)
