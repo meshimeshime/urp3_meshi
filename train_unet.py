@@ -49,6 +49,7 @@ def parse_args():
     parser.add_argument("--batch", type=int, default=Cfg.batch, help="batch size")
     parser.add_argument("--lr", type=float, default=Cfg.lr, help="learning rate")
     parser.add_argument("--img-size", type=int, default=Cfg.img_size, help="input image size")
+    parser.add_argument("--device", default=Cfg.device, help="training device")
     return parser.parse_args()
 
 # ----------------------------
@@ -93,11 +94,9 @@ class CPConjDataset(Dataset):
         self.root = root; self.mask_root = mask_root
         self.img_size = img_size; self.augment = augment
         if items is None:
-            # 두 클래스 모두에서 수집
             imgs = list_images(root)
         else:
             imgs = items
-        # 마스크가 있는 항목만
         valid = []
         for ip in imgs:
             m = mask_root / f"{ip.stem}_mask.png"
@@ -116,27 +115,24 @@ class CPConjDataset(Dataset):
         if img is None: raise RuntimeError(f"fail image: {ip}")
         if mask is None: raise RuntimeError(f"fail mask: {mp}")
 
-        # 리사이즈(동일 파이프)
         img, _ = resize_letterbox(img, self.img_size)
         mask, _ = resize_letterbox(mask, self.img_size)
 
-        # 간단한 augmentation (학습시에만)
         if self.augment:
             if random.random()<0.5:
                 img = cv2.flip(img, 1); mask = cv2.flip(mask, 1)
             if random.random()<0.15:
-                # 밝기/대비
                 a = 1.0 + (random.random()-0.5)*0.4
                 b = (random.random()-0.5)*40
                 img = np.clip(img*a + b, 0, 255).astype(np.uint8)
 
-        mask = (mask>127).astype(np.float32)  # 0/1
+        mask = (mask>127).astype(np.float32)
         img_t = to_tensor(img)
         mask_t = torch.from_numpy(mask)[None, ...].float()
         return img_t, mask_t, str(ip)
 
 # ----------------------------
-# Model (간결 U-Net)
+# Model
 # ----------------------------
 class DoubleConv(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -234,20 +230,22 @@ def save_preds(model, loader, device, out_dir:Path, max_save:int=6):
                 saved+=1
 
 def train(args):
+    device = args.device
     set_seed(Cfg.seed)
     all_imgs = list_images(args.root)
     tr_items, va_items = split_train_val(all_imgs, Cfg.val_ratio, Cfg.seed)
     train_ds = CPConjDataset(args.root, args.mask_root, args.img_size, tr_items, augment=True)
     val_ds   = CPConjDataset(args.root, args.mask_root, args.img_size, va_items, augment=False)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=Cfg.num_workers, pin_memory=True)
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch, shuffle=False, num_workers=Cfg.num_workers, pin_memory=True)
+    pin_mem = device.startswith("cuda")
+    train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=Cfg.num_workers, pin_memory=pin_mem)
+    val_loader   = DataLoader(val_ds,   batch_size=args.batch, shuffle=False, num_workers=Cfg.num_workers, pin_memory=pin_mem)
 
-    model = UNet(in_ch=3, out_ch=1, base=32).to(Cfg.device)
+    model = UNet(in_ch=3, out_ch=1, base=32).to(device)
     bce = nn.BCEWithLogitsLoss()
     dice = DiceLoss()
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=Cfg.weight_decay)
-    scaler = torch.cuda.amp.GradScaler(enabled=(Cfg.amp and Cfg.device=="cuda"))
+    scaler = torch.cuda.amp.GradScaler(enabled=(Cfg.amp and device.startswith("cuda")))
 
     Cfg.out_dir.mkdir(parents=True, exist_ok=True)
     Cfg.pred_dir.mkdir(parents=True, exist_ok=True)
@@ -257,9 +255,9 @@ def train(args):
         model.train()
         tl, tiou = 0.0, 0.0
         for imgs, masks, _ in train_loader:
-            imgs, masks = imgs.to(Cfg.device), masks.to(Cfg.device)
+            imgs, masks = imgs.to(device), masks.to(device)
             opt.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=(Cfg.amp and Cfg.device=="cuda")):
+            with torch.cuda.amp.autocast(enabled=(Cfg.amp and device.startswith("cuda"))):
                 logits = model(imgs)
                 loss = bce(logits, masks) + dice(logits, masks)
             scaler.scale(loss).backward()
@@ -274,7 +272,7 @@ def train(args):
         vl, viou = 0.0, 0.0
         with torch.no_grad():
             for imgs, masks, _ in val_loader:
-                imgs, masks = imgs.to(Cfg.device), masks.to(Cfg.device)
+                imgs, masks = imgs.to(device), masks.to(device)
                 logits = model(imgs)
                 vloss = bce(logits, masks) + dice(logits, masks)
                 vl += vloss.item()*imgs.size(0)
@@ -283,19 +281,21 @@ def train(args):
 
         print(f"[{epoch:03d}/{args.epochs}] train_loss={tl:.4f} val_loss={vl:.4f}  train_iou={tiou:.3f} val_iou={viou:.3f}")
 
-        # save best by val_loss, and keep best_iou too
         if vl < best_val:
             best_val = vl
-            torch.save({"model":model.state_dict(),"cfg":Cfg.__dict__}, Cfg.out_dir/"unet_cp_best.pt")
+            cfg_dump = {k: v for k, v in vars(Cfg).items() if not k.startswith("__")}
+            torch.save({"model": model.state_dict(), "cfg": cfg_dump}, Cfg.out_dir/"unet_cp_best.pt")
         if viou > best_iou:
             best_iou = viou
-            torch.save({"model":model.state_dict(),"cfg":Cfg.__dict__}, Cfg.out_dir/"unet_cp_best_iou.pt")
+            cfg_dump = {k: v for k, v in vars(Cfg).items() if not k.startswith("__")}
+            torch.save({"model": model.state_dict(), "cfg": cfg_dump}, Cfg.out_dir/"unet_cp_best_iou.pt")
 
         if epoch % Cfg.save_every_pred == 0:
-            save_preds(model, val_loader, Cfg.device, Cfg.pred_dir/("ep_%03d"%epoch), max_save=6)
+            save_preds(model, val_loader, device, Cfg.pred_dir/("ep_%03d"%epoch), max_save=6)
 
     print(f"Done. best_val={best_val:.4f}, best_iou={best_iou:.3f}, saved to {Cfg.out_dir}")
 
 if __name__ == "__main__":
     args = parse_args()
+    Cfg.device = str(args.device)
     train(args)
