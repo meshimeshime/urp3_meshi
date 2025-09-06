@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument("--batch", type=int, default=Cfg.batch, help="batch size")
     parser.add_argument("--lr", type=float, default=Cfg.lr, help="learning rate")
     parser.add_argument("--img-size", type=int, default=Cfg.img_size, help="input image size")
-    parser.add_argument("--device", default=Cfg.device, help="training device")
+    parser.add_argument("--device", type=str, default=Cfg.device, help="training device")
     return parser.parse_args()
 
 # ----------------------------
@@ -235,7 +235,8 @@ def save_preds(model, loader, device, out_dir:Path, max_save:int=6):
                 saved+=1
 
 def train(args):
-    device = args.device
+    device = str(args.device)
+    Cfg.device = device
     set_seed(Cfg.seed)
     all_imgs = list_images(args.root)
     tr_items, va_items = split_train_val(all_imgs, Cfg.val_ratio, Cfg.seed)
@@ -303,5 +304,4 @@ def train(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    Cfg.device = str(args.device)
     train(args)
