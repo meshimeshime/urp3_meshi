@@ -30,7 +30,7 @@ class RoiConfig:
     gate: str = "shemo"                 # {"fixed","shemo"}
     lower_half_threshold: float = 0.50  # fixed 모드
     gate_offset_frac: float = 0.08      # shemo 모드
-    gate_lr_margin_frac: float = 1/6    # shemo 모드
+    gate_lr_margin_frac: float = 0.0    # shemo 모드
 
     border: int = 6
     min_component_area: int = 500
@@ -39,6 +39,9 @@ class RoiConfig:
 
     close_radius: int = 3
     open_radius: int = 2
+    dilate_radius: int = 0             # 마스크 확장 (0이면 비활성)
+
+    roi_pad: int = 6                   # ROI crop 패딩
 
     save_mask: bool = True
     save_overlay: bool = True
@@ -155,6 +158,9 @@ def slic_conjunctiva_mask(img_bgr: np.ndarray, cfg: RoiConfig) -> np.ndarray:
     candidate = morphology.binary_closing(candidate, morphology.disk(cfg.close_radius))
     candidate = morphology.binary_opening(candidate, morphology.disk(cfg.open_radius))
 
+    if cfg.dilate_radius > 0:
+        candidate = morphology.binary_dilation(candidate, morphology.disk(cfg.dilate_radius))
+
     # 연결 성분 선택
     labeled = measure.label(candidate)
     if labeled.max() == 0:
@@ -222,10 +228,10 @@ def run_single_image(img_path: Path, out_dir: Path, cfg: RoiConfig) -> dict:
     mask_small = slic_conjunctiva_mask(small_for_mask, cfg)
     mask01 = unletterbox_mask(mask_small, meta).astype(np.uint8)
 
-    crop, bbox = extract_roi_crop(bgr_orig, mask01)
+    crop, bbox = extract_roi_crop(bgr_orig, mask01, pad=cfg.roi_pad)
     over = overlay_mask(bgr_orig, mask01)
     roi_full = roi_only(bgr_orig, mask01, bg_val=0)
-    roi_cropped = roi_only_crop(bgr_orig, mask01, pad=6)
+    roi_cropped = roi_only_crop(bgr_orig, mask01, pad=cfg.roi_pad)
 
     stem = img_path.stem
     crop_path = out_dir / f"{stem}_crop.png"
