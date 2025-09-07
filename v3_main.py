@@ -38,7 +38,7 @@ def parse_args():
     ap.add_argument("--dry-run", action="store_true")
 
     # ROI 파라미터 -> RoiConfig에 주입
-    ap.add_argument("--gate", choices=[None, "shemo"], default=None)
+    ap.add_argument("--gate", choices=["fixed", "shemo"], default="fixed")
     ap.add_argument("--segments", type=int, default=160)
     ap.add_argument("--compactness", type=float, default=10.0)
     ap.add_argument("--a_percentile", type=float, default=80)
@@ -46,6 +46,8 @@ def parse_args():
     # (옵션) 게이트 추가 파라미터도 받기
     ap.add_argument("--gate-offset-frac", type=float, default=None)
     ap.add_argument("--gate-lr-frac", type=float, default=None)
+    ap.add_argument("--roi-pad", type=int, default=None)
+    ap.add_argument("--dilate-radius", type=int, default=None)
 
     ap.add_argument("--no-skin-suppress", action="store_true")
     return ap.parse_args()
@@ -73,6 +75,10 @@ def main():
         cfg.gate_offset_frac = args.gate_offset_frac
     if args.gate_lr_frac is not None and hasattr(cfg, "gate_lr_margin_frac"):
         cfg.gate_lr_margin_frac = args.gate_lr_frac
+    if args.roi_pad is not None and hasattr(cfg, "roi_pad"):
+        cfg.roi_pad = args.roi_pad
+    if args.dilate_radius is not None and hasattr(cfg, "dilate_radius"):
+        cfg.dilate_radius = args.dilate_radius
     # -------------------------------------------
 
     if args.dry_run:

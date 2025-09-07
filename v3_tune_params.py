@@ -46,7 +46,7 @@ if __name__ == "__main__":
     ap.add_argument("--mask-suffix", default="_mask", help="suffix added to image stem to get GT mask name")
     ap.add_argument("--sample", type=int, default=200, help="number of images to sample for quick tuning")
     ap.add_argument("--trials", type=int, default=60, help="random trials (>=30 추천)")
-    ap.add_argument("--gate", choices=["fixed","shemo"], default="shemo")
+    ap.add_argument("--gate", choices=["fixed","shemo"], default="fixed")
     args = ap.parse_args()
 
     image_root = Path(args.images); masks_root = Path(args.masks)
@@ -76,7 +76,7 @@ if __name__ == "__main__":
                         gate=args.gate,
                         lower_half_threshold=lth if lth is not None else 0.5,
                         gate_offset_frac=off if off is not None else 0.08,
-                        gate_lr_margin_frac=lr if lr is not None else 1/6)
+                        gate_lr_margin_frac=lr if lr is not None else 0.0)
 
         ious = []
         for ip in tqdm(imgs, desc=f"trial {t+1}/{args.trials}", leave=False):
