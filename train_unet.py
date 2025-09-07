@@ -221,11 +221,14 @@ def save_preds(model, loader, device, out_dir:Path, max_save:int=6):
                 if saved>=max_save: return
                 im = (imgs[i].cpu().numpy().transpose(1,2,0)*255).astype(np.uint8)
                 pr = (probs[i,0]>0.5).astype(np.uint8)*255
+                roi = im.copy()
+                roi[pr==0] = 0
                 ov = im.copy()
-                red = np.zeros_like(im); red[:,:,2]=255
-                ov[pr>0]=cv2.addWeighted(im,0.6,red,0.4,0)[pr>0]
+                red = np.zeros_like(im); red[:,:,2] = 255
+                ov[pr>0] = cv2.addWeighted(im, 0.6, red, 0.4, 0)[pr>0]
                 stem = Path(names[i]).stem
                 cv2.imwrite(str(out_dir/f"{stem}_pred.png"), pr)
+                cv2.imwrite(str(out_dir/f"{stem}_roi.png"), roi)
                 cv2.imwrite(str(out_dir/f"{stem}_overlay.png"), ov)
                 saved+=1
 
