@@ -1,9 +1,11 @@
 import argparse
+import json
 from train import train_stage1, finetune_stage2, run_inference
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Conjunctiva ROI Pipeline")
+    parser.add_argument("--config", help="Path to JSON config file", default=None)
     sub = parser.add_subparsers(dest="cmd")
 
     s1 = sub.add_parser("train-stage1")
@@ -34,7 +36,13 @@ def parse_args():
     inf.add_argument("--out-dir", default="preds")
     inf.add_argument("--use-eye-detector", action="store_true")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.config:
+        with open(args.config, "r") as f:
+            cfg = json.load(f)
+        for k, v in cfg.items():
+            setattr(args, k.replace('-', '_'), v)
+    return args
 
 
 def main():

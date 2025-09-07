@@ -8,14 +8,14 @@ import numpy as np
 from tqdm import tqdm
 import cv2
 
-from datasets import BaseConjDataset
+from datasets import ConjAnemiaDataset
 from unet import UNet
 from roi_utils import detect_eye_region
 
 
 def _make_loaders(img_root, mask_root, mask_suffix, img_size, batch, augment):
-    ds = BaseConjDataset(img_root, mask_root, mask_suffix,
-                         img_size=img_size, augment=augment)
+    ds = ConjAnemiaDataset(img_root, mask_root, mask_suffix,
+                           img_size=img_size, augment=augment)
     val_len = max(1, int(len(ds) * 0.1))
     train_ds, val_ds = random_split(
         ds, [len(ds) - val_len, val_len],
