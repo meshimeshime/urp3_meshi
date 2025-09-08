@@ -86,18 +86,28 @@ def finetune_stage2(args):
 
 
 def run_inference(args):
-    os.makedirs(args.out_dir, exist_ok=True)
+    from pathlib import Path
+
+    img_root = Path(args.img_root)
+    out_root = Path(args.out_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = UNet().to(device)
     model.load_state_dict(torch.load(args.ckpt, map_location=device))
     model.eval()
 
     exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
-    img_files = [p for p in glob(os.path.join(args.img_root, "*"))
-                 if os.path.splitext(p)[1].lower() in exts]
+    # 모든 하위 폴더까지 재귀적으로 이미지 탐색
+    img_files = [p for p in img_root.rglob("*") if p.suffix.lower() in exts]
+
+    iou_scores, dice_scores = [], []
 
     for fp in tqdm(img_files, desc="infer"):
-        img = cv2.imread(fp)
+        img = cv2.imread(str(fp))
+        if img is None:
+            continue
+
         if args.use_eye_detector:
             x1, y1, x2, y2 = detect_eye_region(img)
             img_crop = img[y1:y2, x1:x2].copy()
@@ -113,7 +123,36 @@ def run_inference(args):
             pred = model(tensor)[0, 0].cpu().numpy()
 
         mask = (pred > 0.5).astype(np.uint8) * 255
-        roi_color = cv2.bitwise_and(orig, orig, mask=mask)
-        stem = os.path.splitext(os.path.basename(fp))[0]
-        cv2.imwrite(os.path.join(args.out_dir, f"{stem}_mask.png"), mask)
-        cv2.imwrite(os.path.join(args.out_dir, f"{stem}_roi.png"), roi_color)
+        roi_color = cv2.bitwise_and(im_res, im_res, mask=mask)
+
+        # 원본 폴더 구조 보존
+        rel_path = fp.relative_to(img_root).with_suffix("")
+        save_dir = out_root / rel_path.parent
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        stem = rel_path.name
+        cv2.imwrite(str(save_dir / f"{stem}_mask.png"), mask)
+        cv2.imwrite(str(save_dir / f"{stem}_roi.png"), roi_color)
+
+        # --- 정답 마스크가 존재하면 평가 ---
+        gt_mask_path = fp.with_name(f"{fp.stem}{args.mask_suffix}.png")
+        if gt_mask_path.exists():
+            mask_gt = cv2.imread(str(gt_mask_path), cv2.IMREAD_GRAYSCALE)
+            if mask_gt is not None:
+                mask_gt = cv2.resize(mask_gt, (args.img_size, args.img_size))
+                mask_pr = cv2.resize(mask, (args.img_size, args.img_size))
+
+                inter = np.logical_and(mask_gt > 127, mask_pr > 127).sum()
+                union = np.logical_or(mask_gt > 127, mask_pr > 127).sum()
+                iou = inter / union if union > 0 else 0
+                dice = (2 * inter) / (mask_gt.sum() + mask_pr.sum() + 1e-6)
+
+                iou_scores.append(iou)
+                dice_scores.append(dice)
+
+    # --- 최종 성능 출력 ---
+    if iou_scores and dice_scores:
+        print(f"Mean IoU: {np.mean(iou_scores):.4f}")
+        print(f"Mean Dice: {np.mean(dice_scores):.4f}")
+    else:
+        print("⚠️ No ground truth masks were found for evaluation.")

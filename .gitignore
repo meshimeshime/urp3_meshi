@@ -1,0 +1,1 @@
+-e "__pycache__/\n*.pyc\nCP-AnemiC dataset/\nConjunctival Images for Anemia Detection/\ncp_gt_masks/\nmodels/\npreds/\npreds_stage1/\nstage1.pt\n.DS_Store"  

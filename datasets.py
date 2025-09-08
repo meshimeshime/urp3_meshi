@@ -42,6 +42,13 @@ class BaseConjDataset(Dataset):
         img_fp, mask_fp = self.pairs[idx]
         img = cv2.imread(img_fp)
         mask = cv2.imread(mask_fp, cv2.IMREAD_GRAYSCALE)
+
+        # --- 크기 맞추기 ---
+        h, w = img.shape[:2]
+        if mask.shape[:2] != (h, w):
+            mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+        # -------------------
+
         aug = self.transform(image=img, mask=mask)
         img, mask = aug["image"], aug["mask"]
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).transpose(2, 0, 1) / 255.0
@@ -93,8 +100,16 @@ class ConjAnemiaDataset(Dataset):
         img_fp, mask_fp = self.pairs[idx]
         img = cv2.imread(img_fp)
         mask = cv2.imread(mask_fp, cv2.IMREAD_GRAYSCALE)
+
+        # --- 크기 맞추기 ---
+        h, w = img.shape[:2]
+        if mask.shape[:2] != (h, w):
+            mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+        # -------------------
+
         aug = self.transform(image=img, mask=mask)
         img, mask = aug["image"], aug["mask"]
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).transpose(2, 0, 1) / 255.0
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).transpose(2, 0, 1).astype(np.float32) / 255.0
         mask = (mask > 127).astype(np.float32)[None, ...]
+
         return img, mask

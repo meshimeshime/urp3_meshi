@@ -35,6 +35,7 @@ def parse_args():
     inf.add_argument("--img-size", type=int, default=256)
     inf.add_argument("--out-dir", default="preds")
     inf.add_argument("--use-eye-detector", action="store_true")
+    inf.add_argument("--mask-suffix", default="_forniceal_palpebral", help="suffix for ground-truth masks")
 
     args = parser.parse_args()
     if args.config:
