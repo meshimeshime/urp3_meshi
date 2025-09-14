@@ -1,8 +1,10 @@
 import os
+import json
 import torch
 import cv2
 import numpy as np
 from glob import glob
+
 from unet import UNet
 
 def _load_img(path, img_size):
@@ -12,7 +14,7 @@ def _load_img(path, img_size):
     tensor = torch.tensor(img.transpose(2, 0, 1) / 255.0, dtype=torch.float32).unsqueeze(0)
     return tensor, img
 
-def run_inference_roi(img_root, ckpt, out_dir="preds_stage2", img_size=256):
+def run_inference_roi(img_root, ckpt, out_dir="preds", img_size=256):
     os.makedirs(out_dir, exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -39,21 +41,41 @@ def run_inference_roi(img_root, ckpt, out_dir="preds_stage2", img_size=256):
         # ROI 추출
         roi = cv2.bitwise_and(orig, orig, mask=mask)
 
+        # 바운딩 박스 및 중심점 계산
+        ys, xs = np.where(mask > 0)
+        if len(xs) == 0 or len(ys) == 0:
+            x1, y1, x2, y2 = 0, 0, mask.shape[1] - 1, mask.shape[0] - 1
+        else:
+            x1, x2 = int(xs.min()), int(xs.max())
+            y1, y2 = int(ys.min()), int(ys.max())
+        cx = int((x1 + x2) / 2)
+        cy = int((y1 + y2) / 2)
+        bbox_data = {"bbox": [x1, y1, x2, y2], "point": [cx, cy]}
+
         # 저장
         rel = os.path.relpath(fp, img_root)
         base = os.path.splitext(rel)[0]
         out_mask = os.path.join(out_dir, f"{base}_mask.png")
         out_roi  = os.path.join(out_dir, f"{base}_roi.png")
+        out_bbox = os.path.join(out_dir, f"{base}_bbox.json")
         os.makedirs(os.path.dirname(out_mask), exist_ok=True)
 
         cv2.imwrite(out_mask, mask)
         cv2.imwrite(out_roi, cv2.cvtColor(roi, cv2.COLOR_RGB2BGR))
-        print(f"Saved: {out_mask}, {out_roi}")
+        with open(out_bbox, "w") as f:
+            json.dump(bbox_data, f)
+
+        print(f"Saved: {out_mask}, {out_roi}, {out_bbox}")
+
 
 if __name__ == "__main__":
-    run_inference_roi(
-        img_root="Conjunctival Images for Anemia Detection",
-        ckpt="stage2_auto_color.pt",
-        out_dir="preds_stage2",
-        img_size=256
-    )
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate ROI masks and bounding boxes from a trained U-Net")
+    parser.add_argument("--img-root", required=True, help="Root directory containing full-eye images")
+    parser.add_argument("--ckpt", required=True, help="Path to trained stage-1 model")
+    parser.add_argument("--out-dir", default="preds", help="Directory to save masks, ROIs, and bbox JSON")
+    parser.add_argument("--img-size", type=int, default=256)
+    args = parser.parse_args()
+
+    run_inference_roi(args.img_root, args.ckpt, args.out_dir, args.img_size)

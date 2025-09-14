@@ -1,40 +1,33 @@
 # urp3_meshi
 
-Two-stage conjunctival ROI segmentation utilities.
+U-Net training and inference scripts for the **Conjunctival Images for Anemia Detection** dataset.
 
 ## Files
-- `main.py`: CLI entry point for training and inference.
-- `train.py`: training loops for Stage-1 (full eye) and Stage-2 (ROI fine-tuning).
-- `datasets.py`: generic dataset loader supporting mask suffix and augmentation.
+- `train.py`: command-line tool to train a stage-1 U-Net for conjunctival ROI segmentation.
+- `inference_roi.py`: generate ROI masks and bounding-box JSON from a trained model.
+- `datasets.py`: simple dataset loader for full-eye images and `_palpebral.png` masks.
 - `unet.py`: lightweight U-Net model.
-- `roi_utils.py`: optional Haar cascade eye detector used during inference.
 
 ## Usage
-### Stage-1 (full eye -> ROI)
+### Train U-Net (stage-1)
 ```
-python main.py train-stage1 \
-    --img-root ConjunctivalImages \
-    --mask-root ConjunctivalImages/palpebral \
+python train.py \
+    --img-root "Conjunctival Images for Anemia Detection" \
+    --mask-root "Conjunctival Images for Anemia Detection" \
     --mask-suffix _palpebral \
     --out stage1.pt
 ```
 
-### Stage-2 fine-tuning (cropped ROI images)
+### Inference and bounding-box extraction
 ```
-python main.py finetune-stage2 \
-    --img-root CP_AnemiC \
-    --mask-root CP_AnemiC \
-    --mask-suffix _mask \
+python inference_roi.py \
+    --img-root "Conjunctival Images for Anemia Detection" \
     --ckpt stage1.pt \
-    --out stage2.pt
+    --out-dir preds
 ```
 
-### Inference on new full-eye images
-```
-python main.py infer \
-    --img-root new_images \
-    --ckpt stage2.pt \
-    --use-eye-detector
-```
+For each input image the script saves:
+- `*_mask.png`: binary ROI mask
+- `*_roi.png`: color ROI image
+- `*_bbox.json`: bounding box and centroid point for SlimSAM
 
-Prediction files saved in `--out-dir` include the binary mask (`*_mask.png`) and the color ROI (`*_roi.png`) preserving original colours.
