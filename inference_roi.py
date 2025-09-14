@@ -67,7 +67,6 @@ def run_inference_roi(img_root, ckpt, out_dir="preds", img_size=256):
 
         print(f"Saved: {out_mask}, {out_roi}, {out_bbox}")
 
-
 if __name__ == "__main__":
     import argparse
 
