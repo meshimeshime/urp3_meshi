@@ -1,156 +1,224 @@
 import os
-from glob import glob
-import torch
-from torch.utils.data import DataLoader, random_split
-import torch.optim as optim
-import torch.nn.functional as F
-import numpy as np
-from tqdm import tqdm
 import cv2
-
-from datasets import ConjAnemiaDataset
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+import numpy as np
 from unet import UNet
-from roi_utils import detect_eye_region
+from datasets import ImageFolderDataset
 
 
-def _make_loaders(img_root, mask_root, mask_suffix, img_size, batch, augment):
-    ds = ConjAnemiaDataset(img_root, mask_root, mask_suffix,
-                           img_size=img_size, augment=augment)
-    val_len = max(1, int(len(ds) * 0.1))
-    train_ds, val_ds = random_split(
-        ds, [len(ds) - val_len, val_len],
-        generator=torch.Generator().manual_seed(0)
-    )
-    train_loader = DataLoader(train_ds, batch_size=batch, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch)
-    return train_loader, val_loader
+# -----------------------------
+# Dice Loss 정의
+# -----------------------------
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, preds, targets):
+        preds = torch.sigmoid(preds)  # 안정화
+        preds = preds.view(-1)
+        targets = targets.view(-1)
+        inter = (preds * targets).sum()
+        dice = (2. * inter + self.smooth) / (preds.sum() + targets.sum() + self.smooth)
+        return 1 - dice
 
 
-def _epoch(model, loader, opt=None, device="cuda"):
-    if opt:
-        model.train()
-    else:
-        model.eval()
-    tot_loss, tot_iou, count = 0, 0, 0
-    for img, mask in loader:
-        img, mask = img.to(device), mask.to(device)
-        pred = model(img)
-        loss = F.binary_cross_entropy(pred, mask)
-        if opt:
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-        iou = ((pred > 0.5) & (mask > 0.5)).float().sum() / \
-              ((pred > 0.5) | (mask > 0.5)).float().sum().clamp_min(1.0)
-        tot_loss += loss.item() * len(img)
-        tot_iou += iou.item() * len(img)
-        count += len(img)
-    return tot_loss / count, tot_iou / count
-
-
+# -----------------------------
+# Stage1: ROI Segmentation 학습
+# -----------------------------
 def train_stage1(args):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = UNet().to(device)
-    train_loader, val_loader = _make_loaders(args.img_root, args.mask_root,
-                                             args.mask_suffix, args.img_size,
-                                             args.batch, augment=True)
-    opt = optim.Adam(model.parameters(), lr=args.lr)
-    best_iou, best_w = 0.0, args.out
-    for ep in range(1, args.epochs + 1):
-        tl, tiou = _epoch(model, train_loader, opt, device)
-        vl, viou = _epoch(model, val_loader, None, device)
-        print(f"[Stage1][Ep {ep:03d}] Train {tl:.3f}/{tiou:.3f}  Val {vl:.3f}/{viou:.3f}")
-        if viou > best_iou:
-            best_iou = viou
-            torch.save(model.state_dict(), best_w)
-    print("Stage-1 best model saved:", best_w)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    dataset = ImageFolderDataset(
+        args.img_root, args.mask_root, img_size=args.img_size
+    )
+    loader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
+
+    model = UNet(in_c=3, out_c=1).to(device)  # 흑백 출력
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    best_loss = float("inf")
+    for epoch in range(args.epochs):
+        model.train()
+        total_loss = 0.0
+        for imgs, masks in loader:
+            imgs, masks = imgs.to(device), masks.to(device)
+
+            preds = model(imgs)
+            loss = criterion(preds, masks)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(loader)
+        print(f"[Stage1][Ep {epoch+1:03d}] Loss {avg_loss:.4f}")
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save(model.state_dict(), args.out)
+            print(f"Stage-1 best model saved: {args.out}")
 
 
+# -----------------------------
+# Stage2: ROI Fine-tuning (BCE + Dice)
+# -----------------------------
 def finetune_stage2(args):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = UNet().to(device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    dataset = ImageFolderDataset(
+        args.img_root, args.mask_root, args.mask_suffix, img_size=args.img_size
+    )
+    loader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
+
+    model = UNet(in_c=3, out_c=1).to(device)
     model.load_state_dict(torch.load(args.ckpt, map_location=device))
-    train_loader, val_loader = _make_loaders(args.img_root, args.mask_root,
-                                             args.mask_suffix, args.img_size,
-                                             args.batch, augment=True)
-    opt = optim.Adam(model.parameters(), lr=args.lr)
-    best_iou, best_w = 0.0, args.out
-    for ep in range(1, args.epochs + 1):
-        tl, tiou = _epoch(model, train_loader, opt, device)
-        vl, viou = _epoch(model, val_loader, None, device)
-        print(f"[Stage2][Ep {ep:03d}] Train {tl:.3f}/{tiou:.3f}  Val {vl:.3f}/{viou:.3f}")
-        if viou > best_iou:
-            best_iou = viou
-            torch.save(model.state_dict(), best_w)
-    print("Stage-2 best model saved:", best_w)
+
+    bce = nn.BCEWithLogitsLoss()
+    dice = DiceLoss()
+
+    def criterion(preds, masks):
+        return bce(preds, masks) + dice(preds, masks)
+
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    best_loss = float("inf")
+    for epoch in range(args.epochs):
+        model.train()
+        total_loss = 0.0
+        for imgs, masks in loader:
+            imgs, masks = imgs.to(device), masks.to(device)
+
+            preds = model(imgs)
+            loss = criterion(preds, masks)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(loader)
+        print(f"[Stage2][Ep {epoch+1:03d}] Loss {avg_loss:.4f}")
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save(model.state_dict(), args.out)
+            print(f"Stage-2 best model saved: {args.out}")
 
 
+# -----------------------------
+# Stage2-AE: Autoencoder Fine-tuning (CP-AnemiC ROI 데이터셋)
+# -----------------------------
+class AutoencoderDataset(Dataset):
+    def __init__(self, root, img_size=256):
+        self.img_files = []
+        for subdir, _, files in os.walk(root):
+            for f in files:
+                if f.lower().endswith((".png", ".jpg", ".jpeg")):
+                    self.img_files.append(os.path.join(subdir, f))
+        self.img_size = img_size
+        print(f"[DEBUG] Found {len(self.img_files)} images under {root}")
+
+    def __len__(self):
+        return len(self.img_files)
+
+    def __getitem__(self, idx):
+        img = cv2.imread(self.img_files[idx])
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (self.img_size, self.img_size))
+        img = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1) / 255.0
+        return img, img  # 입력 = 타겟
+
+
+def finetune_stage2_autoencoder(args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    dataset = AutoencoderDataset(args.img_root, img_size=args.img_size)
+    loader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
+
+    model = UNet(in_c=3, out_c=3).to(device)  # AE는 RGB 재구성
+
+    # Stage1 checkpoint 로드 (out 레이어는 제외)
+    state_dict = torch.load(args.ckpt, map_location=device)
+    filtered_state_dict = {k: v for k, v in state_dict.items() if not k.startswith("out.")}
+    missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
+    print("Loaded from ckpt. Missing keys:", missing, "Unexpected keys:", unexpected)
+
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    best_loss = float("inf")
+    for epoch in range(args.epochs):
+        model.train()
+        total_loss = 0.0
+        for imgs, _ in loader:
+            imgs = imgs.to(device)
+
+            recons = model(imgs)
+            loss = criterion(recons, imgs)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(loader)
+        print(f"[Stage2-AE][Ep {epoch+1:03d}] Loss {avg_loss:.4f}")
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save(model.state_dict(), args.out)
+            print(f"Stage-2 AE best model saved: {args.out}")
+
+
+# -----------------------------
+# Inference (IoU / Dice 계산 포함)
+# -----------------------------
 def run_inference(args):
-    from pathlib import Path
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    img_root = Path(args.img_root)
-    out_root = Path(args.out_dir)
-    out_root.mkdir(parents=True, exist_ok=True)
+    dataset = ImageFolderDataset(
+        args.img_root, args.mask_root, args.mask_suffix, img_size=args.img_size
+    )
+    loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = UNet().to(device)
+    model = UNet(in_c=3, out_c=1).to(device)  # out_c=1 고정
     model.load_state_dict(torch.load(args.ckpt, map_location=device))
     model.eval()
 
-    exts = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
-    # 모든 하위 폴더까지 재귀적으로 이미지 탐색
-    img_files = [p for p in img_root.rglob("*") if p.suffix.lower() in exts]
+    os.makedirs(args.out_dir, exist_ok=True)
 
     iou_scores, dice_scores = [], []
-
-    for fp in tqdm(img_files, desc="infer"):
-        img = cv2.imread(str(fp))
-        if img is None:
-            continue
-
-        if args.use_eye_detector:
-            x1, y1, x2, y2 = detect_eye_region(img)
-            img_crop = img[y1:y2, x1:x2].copy()
-        else:
-            img_crop = img.copy()
-
-        orig = img_crop.copy()
-        im_res = cv2.resize(img_crop, (args.img_size, args.img_size))
-        tensor = cv2.cvtColor(im_res, cv2.COLOR_BGR2RGB).transpose(2, 0, 1)
-        tensor = torch.tensor(tensor / 255.0, dtype=torch.float32).unsqueeze(0).to(device)
-
+    for i, (img, mask_gt) in enumerate(loader):
+        img, mask_gt = img.to(device), mask_gt.to(device)
         with torch.no_grad():
-            pred = model(tensor)[0, 0].cpu().numpy()
+            pred = model(img)
 
-        mask = (pred > 0.5).astype(np.uint8) * 255
-        roi_color = cv2.bitwise_and(im_res, im_res, mask=mask)
+        pred_bin = (pred > 0.5).float()
 
-        # 원본 폴더 구조 보존
-        rel_path = fp.relative_to(img_root).with_suffix("")
-        save_dir = out_root / rel_path.parent
-        save_dir.mkdir(parents=True, exist_ok=True)
+        # save predicted mask
+        stem = f"{i:03d}"
+        out_path = os.path.join(args.out_dir, f"{stem}_roi.png")
+        out_img = (pred_bin[0, 0].cpu().numpy() * 255).astype(np.uint8)
+        cv2.imwrite(out_path, out_img)
 
-        stem = rel_path.name
-        cv2.imwrite(str(save_dir / f"{stem}_mask.png"), mask)
-        cv2.imwrite(str(save_dir / f"{stem}_roi.png"), roi_color)
+        # IoU, Dice 계산
+        inter = (pred_bin * mask_gt).sum().item()
+        union = ((pred_bin + mask_gt) > 0).sum().item()
+        iou = inter / union if union > 0 else 0
+        dice = (2 * inter) / (pred_bin.sum().item() + mask_gt.sum().item() + 1e-6)
 
-        # --- 정답 마스크가 존재하면 평가 ---
-        gt_mask_path = fp.with_name(f"{fp.stem}{args.mask_suffix}.png")
-        if gt_mask_path.exists():
-            mask_gt = cv2.imread(str(gt_mask_path), cv2.IMREAD_GRAYSCALE)
-            if mask_gt is not None:
-                mask_gt = cv2.resize(mask_gt, (args.img_size, args.img_size))
-                mask_pr = cv2.resize(mask, (args.img_size, args.img_size))
+        iou_scores.append(iou)
+        dice_scores.append(dice)
 
-                inter = np.logical_and(mask_gt > 127, mask_pr > 127).sum()
-                union = np.logical_or(mask_gt > 127, mask_pr > 127).sum()
-                iou = inter / union if union > 0 else 0
-                dice = (2 * inter) / (mask_gt.sum() + mask_pr.sum() + 1e-6)
-
-                iou_scores.append(iou)
-                dice_scores.append(dice)
-
-    # --- 최종 성능 출력 ---
     if iou_scores and dice_scores:
         print(f"Mean IoU: {np.mean(iou_scores):.4f}")
         print(f"Mean Dice: {np.mean(dice_scores):.4f}")
