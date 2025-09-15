@@ -1,13 +1,6 @@
-__pycache__/
-*.pyc
-*.pt
-
-# Dataset & outputs
-CP-AnemiC dataset/
+# Ignore datasets and large files
+Eye Conjunctiva Segmentation Dataset/
 Conjunctival Images for Anemia Detection/
-cp_gt_masks/
-preds/
-preds_stage1/
-preds_stage2/
-recon_out/
-models/
+CP-AnemiC dataset/
+*.pt
+*.pth

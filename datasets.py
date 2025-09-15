@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 from torch.utils.data import Dataset
 import albumentations as A
+import re
 
 
 class ImageFolderDataset(Dataset):
@@ -17,9 +18,8 @@ class ImageFolderDataset(Dataset):
         # India, Italy 하위 모든 jpg 탐색
         for img_path in self.img_root.rglob("*.jpg"):
             stem = img_path.stem
-            # 대응되는 마스크 경로 찾기
-            mask_path = img_path.with_name(f"{stem}{mask_suffix}.png")
-            if mask_path.exists():
+            mask_path = self.mask_root / f"{stem}{mask_suffix}.png"
+            if re.match(r"^\d+_palpebral\.png$", mask_path.name):
                 self.img_files.append(str(img_path))
                 self.mask_files.append(str(mask_path))
 
@@ -29,17 +29,24 @@ class ImageFolderDataset(Dataset):
         return len(self.img_files)
 
     def __getitem__(self, idx):
-        img = cv2.imread(self.img_files[idx])
+        img = cv2.imread(str(self.img_files[idx]))
+        if img is None:
+            raise FileNotFoundError(f"Image not found: {self.img_files[idx]}")
+
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = cv2.resize(img, (self.img_size, self.img_size))
         img = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
-        mask = cv2.imread(self.mask_files[idx], cv2.IMREAD_GRAYSCALE)
+        mask = cv2.imread(str(self.mask_files[idx]), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise FileNotFoundError(f"Mask not found: {self.mask_files[idx]}")
+
         mask = cv2.resize(mask, (self.img_size, self.img_size))
         mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0) / 255.0
         mask = mask.repeat(3, 1, 1)  # 흑백 마스크를 3채널로 확장
 
         return img, mask
+
 
 class BaseConjDataset(Dataset):
     """Load image/mask pairs, supporting optional mask suffix and augmentation."""
@@ -76,8 +83,13 @@ class BaseConjDataset(Dataset):
 
     def __getitem__(self, idx):
         img_fp, mask_fp = self.pairs[idx]
-        img = cv2.imread(img_fp)
-        mask = cv2.imread(mask_fp, cv2.IMREAD_GRAYSCALE)
+        img = cv2.imread(str(img_fp))
+        if img is None:
+            raise FileNotFoundError(f"Image not found: {img_fp}")
+
+        mask = cv2.imread(str(mask_fp), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise FileNotFoundError(f"Mask not found: {mask_fp}")
 
         # --- 크기 맞추기 ---
         h, w = img.shape[:2]
@@ -93,14 +105,7 @@ class BaseConjDataset(Dataset):
 
 
 class ConjAnemiaDataset(Dataset):
-    """Dataset that recursively scans folders for image/mask pairs.
-
-    This version searches all sub-directories under ``img_root`` using
-    ``Path.rglob("*.jpg")`` (and other extensions) so that images can be
-    organised in arbitrary nested structures.  Masks are expected to have the
-    same relative path under ``mask_root`` and use ``mask_suffix`` before the
-    ``.png`` extension.
-    """
+    """Dataset that recursively scans folders for image/mask pairs."""
 
     def __init__(self, img_root, mask_root=None, mask_suffix="", img_size=256,
                  augment=False, exts=(".jpg", ".jpeg", ".png", ".tif", ".tiff")):
@@ -115,7 +120,8 @@ class ConjAnemiaDataset(Dataset):
                 rel = img_path.relative_to(self.img_root)
                 mask_path = self.mask_root / rel.parent / f"{img_path.stem}{mask_suffix}.png"
                 if mask_path.exists():
-                    self.pairs.append((str(img_path), str(mask_path)))
+                    if re.match(r"^\d+_palpebral\.png$", mask_path.name):
+                        self.pairs.append((str(img_path), str(mask_path)))
 
         self.transform = (
             A.Compose([
@@ -134,8 +140,13 @@ class ConjAnemiaDataset(Dataset):
 
     def __getitem__(self, idx):
         img_fp, mask_fp = self.pairs[idx]
-        img = cv2.imread(img_fp)
-        mask = cv2.imread(mask_fp, cv2.IMREAD_GRAYSCALE)
+        img = cv2.imread(str(img_fp))
+        if img is None:
+            raise FileNotFoundError(f"Image not found: {img_fp}")
+
+        mask = cv2.imread(str(mask_fp), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise FileNotFoundError(f"Mask not found: {mask_fp}")
 
         # --- 크기 맞추기 ---
         h, w = img.shape[:2]

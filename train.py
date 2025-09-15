@@ -163,6 +163,7 @@ def run_inference(args):
     )
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
+    # checkpoint랑 동일하게 out_c=3
     model = UNet(in_c=3, out_c=3).to(device)
     model.load_state_dict(torch.load(args.ckpt, map_location=device))
     model.eval()
@@ -173,13 +174,14 @@ def run_inference(args):
     for i, (img, mask_gt) in enumerate(loader):
         img, mask_gt = img.to(device), mask_gt.to(device)
         with torch.no_grad():
-            pred = model(img)
+            pred = model(img)   # [B,3,H,W]
+            pred = torch.sigmoid(pred[:,0:1,:,:])  # 첫 채널만 사용
 
         pred_bin = (pred > 0.5).float()
 
         stem = f"{i:03d}"
         out_path = os.path.join(args.out_dir, f"{stem}_roi.png")
-        out_img = (pred_bin[0].cpu().permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+        out_img = (pred_bin[0,0].cpu().numpy() * 255).astype(np.uint8)
         cv2.imwrite(out_path, out_img)
 
         inter = (pred_bin * mask_gt).sum().item()
@@ -195,3 +197,4 @@ def run_inference(args):
         print(f"Mean Dice: {np.mean(dice_scores):.4f}")
     else:
         print("⚠️ No ground truth masks were found for evaluation.")
+

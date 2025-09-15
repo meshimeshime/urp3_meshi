@@ -1,5 +1,7 @@
 import argparse
 import json
+
+from numpy import inf
 from train import train_stage1, finetune_stage2, finetune_stage2_autoencoder, run_inference
 
 
@@ -48,7 +50,8 @@ def parse_args():
     inf.add_argument("--img-size", type=int, default=256)
     inf.add_argument("--out-dir", default="preds")
     inf.add_argument("--use-eye-detector", action="store_true")
-    inf.add_argument("--mask-suffix", default="_forniceal_palpebral", help="suffix for ground-truth masks")
+    inf.add_argument("--mask-root", default=None, help="(optional) ground-truth mask root")
+    inf.add_argument("--mask-suffix", default="", help="(optional) ground-truth mask suffix")
 
     args = parser.parse_args()
     if args.config:
