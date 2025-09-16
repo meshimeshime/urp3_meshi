@@ -75,10 +75,21 @@ def visualize_reconstruction(img_root, ckpt, out_dir="recon_out", img_size=256, 
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--img-root", type=str, required=True)
+    parser.add_argument("--ckpt", type=str, required=True)
+    parser.add_argument("--out-dir", type=str, default="recon_out")  # <- 새 옵션 추가
+    parser.add_argument("--img-size", type=int, default=256)
+    parser.add_argument("--num-samples", type=int, default=10)
+    args = parser.parse_args()
+
     visualize_reconstruction(
-        img_root="Conjunctival Images for Anemia Detection",
-        ckpt="stage1.pt",
-        out_dir="recon_out",
-        img_size=256,
-        num_samples=10
+        img_root=args.img_root,
+        ckpt=args.ckpt,
+        out_dir=args.out_dir,
+        img_size=args.img_size,
+        num_samples=args.num_samples
     )
+

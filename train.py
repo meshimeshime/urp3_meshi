@@ -6,7 +6,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 from unet import UNet
-from datasets import ImageFolderDataset
+from datasets import ImageFolderDataset, ConjAnemiaDataset  # ✅ stage1/2 모두 import
 
 
 # -----------------------------
@@ -32,7 +32,7 @@ class DiceLoss(nn.Module):
 def train_stage1(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    dataset = ImageFolderDataset(
+    dataset = ImageFolderDataset(  # ✅ stage1은 단순 dataset
         args.img_root, args.mask_root, img_size=args.img_size
     )
     loader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
@@ -67,13 +67,16 @@ def train_stage1(args):
 
 
 # -----------------------------
-# Stage2: ROI Fine-tuning (BCE + Dice)
+# Stage2: ROI Fine-tuning (BCE + Dice, 증강 포함)
 # -----------------------------
 def finetune_stage2(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    dataset = ImageFolderDataset(
-        args.img_root, args.mask_root, args.mask_suffix, img_size=args.img_size
+    dataset = ConjAnemiaDataset(  # ✅ stage2는 증강 dataset
+        args.img_root, args.mask_root,
+        mask_suffix=args.mask_suffix,
+        img_size=args.img_size,
+        augment=True
     )
     loader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
 
@@ -145,7 +148,7 @@ def finetune_stage2_autoencoder(args):
 
     model = UNet(in_c=3, out_c=3).to(device)  # AE는 RGB 재구성
 
-    # Stage1 checkpoint 로드 (out 레이어는 제외)
+    # Stage1 checkpoint 로드 (out 레이어 제외)
     state_dict = torch.load(args.ckpt, map_location=device)
     filtered_state_dict = {k: v for k, v in state_dict.items() if not k.startswith("out.")}
     missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
@@ -224,3 +227,4 @@ def run_inference(args):
         print(f"Mean Dice: {np.mean(dice_scores):.4f}")
     else:
         print("⚠️ No ground truth masks were found for evaluation.")
+
