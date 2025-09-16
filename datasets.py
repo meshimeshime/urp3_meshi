@@ -24,22 +24,20 @@ def resize_with_padding(img, size=256):
 
 
 # -----------------------------
-# Stage1: 단순 Dataset (baseline)
+# Stage1 Dataset
 # -----------------------------
 class ImageFolderDataset(Dataset):
-    def __init__(self, img_root, mask_root, img_size=256):
+    def __init__(self, img_root, mask_root, img_size=256, mask_suffix="_palpebral"):
         self.img_root = Path(img_root)
         self.mask_root = Path(mask_root)
         self.img_size = img_size
+        self.mask_suffix = mask_suffix
 
         self.img_files, self.mask_files = [], []
-
-        # jpg 기준 _palpebral.png 매칭
         for img_path in self.img_root.rglob("*.jpg"):
             stem = img_path.stem
-            mask_path = img_path.with_name(f"{stem}_palpebral.png")
-
-            if mask_path.exists() and "forniceal" not in mask_path.name:
+            mask_path = self.mask_root / f"{stem}{mask_suffix}.png"
+            if mask_path.exists():
                 self.img_files.append(str(img_path))
                 self.mask_files.append(str(mask_path))
 
@@ -63,12 +61,12 @@ class ImageFolderDataset(Dataset):
 
 
 # -----------------------------
-# Stage2: Augmentation Dataset
+# Stage2 Dataset with Augmentation
 # -----------------------------
 class ConjAnemiaDataset(Dataset):
-    def __init__(self, img_root, mask_root=None, mask_suffix="_palpebral",
+    def __init__(self, img_root, mask_root=None, mask_suffix="_mask",
                  img_size=256, augment=True,
-                 exts=(".jpg", ".jpeg", ".png", ".tif", ".tiff")):
+                 exts=(".jpg", ".jpeg", ".png")):
         self.img_root = Path(img_root)
         self.mask_root = Path(mask_root) if mask_root else self.img_root
         self.mask_suffix = mask_suffix
@@ -78,9 +76,11 @@ class ConjAnemiaDataset(Dataset):
         for ext in self.exts:
             for img_path in self.img_root.rglob(f"*{ext}"):
                 stem = img_path.stem
-                mask_path = img_path.with_name(f"{stem}{mask_suffix}.png")
-                if mask_path.exists() and "forniceal" not in mask_path.name:
+                mask_path = self.mask_root / f"{stem}{mask_suffix}.png"
+                if mask_path.exists():
                     self.pairs.append((str(img_path), str(mask_path)))
+                else:
+                    print(f"[MISS] {mask_path} not found")
 
         self.transform = (
             A.Compose([
@@ -95,7 +95,7 @@ class ConjAnemiaDataset(Dataset):
             ]) if augment else A.Compose([A.Resize(img_size, img_size)])
         )
 
-        print(f"[DEBUG] Found {len(self.pairs)} pairs under {img_root}")
+        print(f"[DEBUG] Found {len(self.pairs)} pairs under {img_root} + {mask_root}")
 
     def __len__(self):
         return len(self.pairs)
@@ -105,7 +105,6 @@ class ConjAnemiaDataset(Dataset):
         img = cv2.imread(img_fp)
         mask = cv2.imread(mask_fp, cv2.IMREAD_GRAYSCALE)
 
-        # 크기 맞추기
         h, w = img.shape[:2]
         if mask.shape[:2] != (h, w):
             mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
@@ -117,3 +116,4 @@ class ConjAnemiaDataset(Dataset):
         mask = (mask > 127).astype(np.float32)[None, ...]
 
         return torch.tensor(img, dtype=torch.float32), torch.tensor(mask, dtype=torch.float32)
+
